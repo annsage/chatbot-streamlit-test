@@ -11,10 +11,37 @@ st.set_page_config(page_title="케이크 디자이너 챗봇 🎂", page_icon="�
 
 
 def get_api_key() -> str:
+    # 1) Try Streamlit secrets
     try:
-        return st.secrets["OPENAI_API_KEY"]
+        val = st.secrets.get("OPENAI_API_KEY")
+        if val:
+            return val
     except Exception:
-        return ""
+        # ignore - streamlit might not expose secrets in some environments
+        pass
+
+    # 2) Try environment variable
+    import os
+
+    env = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAIAPIKEY")
+    if env:
+        return env
+
+    # 3) Try reading .streamlit/secrets.toml directly as last resort (do not log key)
+    try:
+        base = os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
+        if os.path.exists(base):
+            with open(base, "r", encoding="utf-8") as f:
+                for line in f:
+                    if "OPENAI_API_KEY" in line:
+                        # naive parse: find first quoted substring
+                        m = re.search(r'OPENAI_API_KEY\s*=\s*"([^"]+)"', line)
+                        if m:
+                            return m.group(1)
+    except Exception:
+        pass
+
+    return ""
 
 
 def init_session_state():
