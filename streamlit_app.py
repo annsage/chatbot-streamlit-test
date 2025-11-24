@@ -190,18 +190,32 @@ def search_image_free(
 def parse_suggestions(text: str) -> List[Dict[str, Any]]:
     """Parse AI response into structured suggestions."""
     # Ensure we have a string to operate on
+    def coerce_to_string(x):
+        if x is None:
+            return ""
+        if isinstance(x, str):
+            return x
+        if isinstance(x, dict):
+            for k in ("content", "message", "text", "data"):
+                if k in x and x[k] is not None:
+                    return coerce_to_string(x[k])
+            return str(x)
+        # Try common attributes
+        for attr in ("content", "message", "text", "data"):
+            try:
+                if hasattr(x, attr):
+                    val = getattr(x, attr)
+                    if val is not None:
+                        return coerce_to_string(val)
+            except Exception:
+                continue
+        return str(x)
+
     if text is None:
         return [{"title": "추천 없음", "description": "응답이 비어 있습니다."}]
 
     if not isinstance(text, str):
-        # Try to extract content attribute or mapping
-        try:
-            if isinstance(text, dict):
-                text = text.get("content") or text.get("message") or str(text)
-            else:
-                text = getattr(text, "content", None) or getattr(text, "message", None) or str(text)
-        except Exception:
-            text = str(text)
+        text = coerce_to_string(text)
 
     try:
         obj = json.loads(text)
@@ -216,7 +230,8 @@ def parse_suggestions(text: str) -> List[Dict[str, Any]]:
         pass
 
     # Fallback: split by numbered headings
-    parts = re.split(r"(?:제안|추천|아이디어)\s*\d+[:\.)]?|^\d+[:\.)]", text, flags=re.MULTILINE)
+    pattern = re.compile(r"(?:제안|추천|아이디어)\s*\d+[:\.)]?|^\d+[:\.)]", re.MULTILINE)
+    parts = pattern.split(text)
     suggestions = []
     for p in parts:
         p = p.strip()
