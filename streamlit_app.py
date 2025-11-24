@@ -45,6 +45,32 @@ def get_api_key() -> str:
     return ""
 
 
+def ensure_string(x: Any) -> str:
+    """Convert various response/message objects to a plain string safely."""
+    if x is None:
+        return ""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        for k in ("content", "message", "text", "data"):
+            if k in x and x[k] is not None:
+                return ensure_string(x[k])
+        return json.dumps(x, ensure_ascii=False)
+    # fallback to attributes
+    for attr in ("content", "message", "text", "data"):
+        try:
+            if hasattr(x, attr):
+                val = getattr(x, attr)
+                if val is not None:
+                    return ensure_string(val)
+        except Exception:
+            continue
+    try:
+        return str(x)
+    except Exception:
+        return ""
+
+
 def init_session_state():
     """Initialize session state variables."""
     if "messages" not in st.session_state:
@@ -291,11 +317,12 @@ def render_design_card(
             # Display cached image (as link + embedded)
             if cache_key in st.session_state.generated_images:
                 img_url = st.session_state.generated_images[cache_key]
+    
                 if img_url:
                     # Display image from URL
-                    img_placeholder.image(img_url, use_column_width=True)
-                    # Show clickable link
-                    img_placeholder.markdown(f"[🔗 원본 이미지 보기](https://unsplash.com/?utm_source=cakebot&utm_medium=referral)", unsafe_allow_html=True)
+                    img_placeholder.image(img_url, use_container_width=True)
+                    # Show clickable link to the image
+                    img_placeholder.markdown(f"[🔗 원본 이미지 보기]({img_url})", unsafe_allow_html=True)
         
         # Right: Text description
         with col_right:
@@ -411,10 +438,17 @@ def render_main_interface() -> None:
             return
         
         client = create_openai_client(api_key)
+        # Sanitize messages to ensure all contents are strings
+        sanitized_msgs = []
+        for m in api_messages:
+            role = m.get("role", "user")
+            content = ensure_string(m.get("content")) if isinstance(m, dict) else ensure_string(m)
+            sanitized_msgs.append({"role": role, "content": content})
+
         with st.spinner("✨ 다양한 디자인 추천을 생성 중입니다..."):
             assistant_reply = call_chat_api(
                 client,
-                api_messages,
+                sanitized_msgs,
                 model="gpt-4o-mini"
             )
         
@@ -452,9 +486,11 @@ def render_main_interface() -> None:
                     "아래 디자인 추천 내용을 짧고 재미있게 요약해 주세요 (2-3문장). "
                     "이모지와 따뜻한 말투를 사용하세요."
                 )
+                # Ensure last_assistant is converted to plain string
+                user_content = ensure_string(st.session_state.last_assistant)
                 messages = [
                     {"role": "system", "content": sys},
-                    {"role": "user", "content": st.session_state.last_assistant},
+                    {"role": "user", "content": user_content},
                 ]
                 summary = call_chat_api(client, messages, model="gpt-4o-mini")
             st.info(f"👨‍🍳 {summary}")
