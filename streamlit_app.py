@@ -3,38 +3,39 @@ from openai import OpenAI
 from typing import List, Dict, Any
 import json
 import base64
-import io
 import re
+import os
 
 
-st.set_page_config(page_title="케이크 디자이너 챗봇 🎂", page_icon="🍰", layout="wide")
+st.set_page_config(
+    page_title="디자인 트렌드 추천봇 🎨",
+    page_icon="🍰",
+    layout="wide"
+)
 
 
 def get_api_key() -> str:
+    """Get API key from secrets, env vars, or direct file read."""
     # 1) Try Streamlit secrets
     try:
         val = st.secrets.get("OPENAI_API_KEY")
         if val:
             return val
     except Exception:
-        # ignore - streamlit might not expose secrets in some environments
         pass
 
     # 2) Try environment variable
-    import os
-
     env = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAIAPIKEY")
     if env:
         return env
 
-    # 3) Try reading .streamlit/secrets.toml directly as last resort (do not log key)
+    # 3) Try reading .streamlit/secrets.toml directly as last resort
     try:
         base = os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
         if os.path.exists(base):
             with open(base, "r", encoding="utf-8") as f:
                 for line in f:
                     if "OPENAI_API_KEY" in line:
-                        # naive parse: find first quoted substring
                         m = re.search(r'OPENAI_API_KEY\s*=\s*"([^"]+)"', line)
                         if m:
                             return m.group(1)
@@ -45,32 +46,84 @@ def get_api_key() -> str:
 
 
 def init_session_state():
+    """Initialize session state variables."""
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "last_assistant" not in st.session_state:
         st.session_state.last_assistant = ""
+    if "event_type" not in st.session_state:
+        st.session_state.event_type = None
+    if "design_styles" not in st.session_state:
+        st.session_state.design_styles = []
+    if "generated_images" not in st.session_state:
+        st.session_state.generated_images = {}
 
 
-def build_system_prompt() -> str:
+EVENTS = [
+    "🎄 크리스마스",
+    "💍 결혼식",
+    "🎉 개업/파티",
+    "🎂 생일",
+    "💝 발렌타인데이",
+    "👰 신혼",
+    "🎓 졸업",
+    "🏠 집들이",
+    "🌸 봄 축제",
+    "🌙 추석/명절",
+]
+
+DESIGN_CATEGORIES = {
+    "케이크": "cake design",
+    "벽지": "wallpaper design",
+    "일러스트": "illustration design",
+    "웹사이트": "website design",
+    "배경화면": "background wallpaper",
+    "포스터": "poster design",
+    "로고": "logo design",
+    "패키징": "packaging design",
+}
+
+COUNTRIES = ["한국", "일본", "미국", "유럽", "북유럽", "프랑스"]
+
+
+def build_system_prompt(event_type: str, design_styles: List[str], countries: List[str]) -> str:
+    """Build comprehensive prompt for diverse design recommendations."""
+    styles_text = ", ".join(design_styles) if design_styles else "케이크"
+    countries_text = ", ".join(countries) if countries else "한국"
+    
     return (
-        "당신은 숙련된 케이크 디자이너 어시스턴트입니다. 사용자는 케이크 디자이너이며, "
-        "소비자의 요구나 최신 트렌드를 반영한 케이크 디자인 메뉴를 개발하려고 합니다. "
-        "추천은 색상, 질감, 맛, 식감, 빵 종류, 데코레이션 아이디어, 서빙/계절 제안 등을 포함해야 합니다. "
-        "응답은 친절하고 실용적이며, 구체적인 대안(예: 3가지 제안)을 포함하세요."
+        f"당신은 창의적인 디자인 큐레이터입니다. 사용자가 '{event_type}' 이벤트에 대해 "
+        f"다음 디자인 카테고리의 추천을 요청했습니다: {styles_text}. "
+        f"다음 국가/지역의 트렌드도 반영해 주세요: {countries_text}. "
+        f"\n\n응답 방식:\n"
+        f"1. 각 디자인 카테고리마다 2-3가지 구체적인 아이디어를 제시하세요.\n"
+        f"2. 색상 팔레트, 스타일 특징, 영감 출처를 포함하세요.\n"
+        f"3. 각 제안은 명확한 제목과 상세 설명으로 구성하세요.\n"
+        f"4. 최신 트렌드와 국가별 특징을 반영하세요.\n"
+        f"5. 실제로 적용 가능한 구체적인 팁을 제공하세요."
     )
 
 
 def create_openai_client(api_key: str) -> OpenAI:
+    """Create OpenAI client."""
     return OpenAI(api_key=api_key)
 
 
-def call_chat_api(client: OpenAI, messages: List[Dict[str, Any]], model: str = "gpt-4o-mini") -> str:
+def call_chat_api(
+    client: OpenAI,
+    messages: List[Dict[str, Any]],
+    model: str = "gpt-4o-mini"
+) -> str:
+    """Call OpenAI Chat API."""
     try:
-        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.7)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.8
+        )
         content = None
         if getattr(resp, "choices", None):
             ch = resp.choices[0]
-            # New SDK may have message as dict-like
             content = getattr(ch, "message", None)
             if isinstance(content, dict):
                 content = content.get("content")
@@ -84,26 +137,45 @@ def call_chat_api(client: OpenAI, messages: List[Dict[str, Any]], model: str = "
 
 
 @st.cache_data(show_spinner=False)
-def generate_image_cached(api_key: str, prompt: str, size: str = "512x512") -> bytes:
+def generate_image_cached(
+    api_key: str,
+    prompt: str,
+    size: str = "512x512"
+) -> bytes:
+    """Generate image using DALL-E via OpenAI."""
     client = create_openai_client(api_key)
     try:
-        resp = client.images.generate(model="gpt-image-1", prompt=prompt, size=size)
-        b64 = resp.data[0].b64_json
-        img_bytes = base64.b64decode(b64)
+        resp = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        # Handle URL-based response (dall-e-3 returns URLs, not b64)
+        if hasattr(resp.data[0], 'b64_json'):
+            b64 = resp.data[0].b64_json
+            img_bytes = base64.b64decode(b64)
+        elif hasattr(resp.data[0], 'url'):
+            # Fetch from URL
+            import urllib.request
+            url = resp.data[0].url
+            with urllib.request.urlopen(url) as response:
+                img_bytes = response.read()
+        else:
+            raise RuntimeError("Unexpected image response format")
         return img_bytes
     except Exception as e:
         raise RuntimeError(f"이미지 생성 중 오류: {e}")
 
 
 def parse_suggestions(text: str) -> List[Dict[str, Any]]:
-    # Try parse JSON first
+    """Parse AI response into structured suggestions."""
     try:
         obj = json.loads(text)
-        # Expect structure {"suggestions": [ ... ]}
         if isinstance(obj, dict):
             if "suggestions" in obj and isinstance(obj["suggestions"], list):
                 return obj["suggestions"]
-            # if direct list
             if isinstance(obj.get("items"), list):
                 return obj.get("items")
         if isinstance(obj, list):
@@ -111,146 +183,250 @@ def parse_suggestions(text: str) -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    # Fallback: split by numbered headings (제안 1 / 1.)
-    parts = re.split(r"(?:제안|추천)\s*\d+[:\.)]?|^\d+[:\.)]", text)
+    # Fallback: split by numbered headings
+    parts = re.split(
+        r"(?:제안|추천|아이디어)\s*\d+[:\.)]?|^\d+[:\.)]",
+        text
+    )
     suggestions = []
     for p in parts:
         p = p.strip()
         if not p:
             continue
-        # first line as title
         lines = p.splitlines()
         title = lines[0].strip()
         body = "\n".join(lines[1:]).strip() if len(lines) > 1 else p
-        suggestions.append({"title": title or p[:30], "description": body or p})
+        suggestions.append({
+            "title": title or p[:40],
+            "description": body or p
+        })
+    
     if not suggestions:
-        suggestions = [{"title": "제안", "description": text}]
+        suggestions = [{"title": "추천", "description": text}]
     return suggestions
 
 
-def create_baker_summary(client: OpenAI, assistant_text: str) -> str:
-    sys = "당신은 친근한 제빵사 캐릭터입니다. 아래 추천 내용을 짧고 매력적으로 요약해 주세요 (2-3문장). 이모지와 말투를 사용하세요."
-    messages = [
-        {"role": "system", "content": sys},
-        {"role": "user", "content": assistant_text},
-    ]
-    return call_chat_api(client, messages, model="gpt-4o-mini")
-
-
-def render_card(idx: int, suggestion: Dict[str, Any], api_key: str):
-    title = suggestion.get("title") or suggestion.get("name") or f"제안 {idx+1}"
-    desc = suggestion.get("description") or suggestion.get("details") or ""
-    colors = suggestion.get("colors") or suggestion.get("color")
-    texture = suggestion.get("texture")
-    flavor = suggestion.get("flavor") or suggestion.get("taste")
-    cake_base = suggestion.get("cake_base") or suggestion.get("빵 종류")
-    tips = suggestion.get("tips") or suggestion.get("tips_and_tricks")
-
-    container = st.container()
-    with container:
-        left, right = st.columns([1, 3])
-        with left:
-            placeholder = st.empty()
-            btn = st.button("이미지 생성", key=f"img_btn_{idx}")
-            if btn:
-                # build image prompt
-                p_parts = [title]
-                if colors:
-                    p_parts.append(f"colors: {colors}")
-                if texture:
-                    p_parts.append(f"texture: {texture}")
-                if flavor:
-                    p_parts.append(f"flavor: {flavor}")
-                prompt = ", ".join(p_parts) + ", high quality photo of a cake, studio lighting"
-                try:
-                    img_bytes = generate_image_cached(api_key, prompt, size="512x512")
-                    placeholder.image(img_bytes, use_column_width=True)
-                except Exception as e:
-                    placeholder.error(str(e))
-        with right:
-            st.markdown(f"#### 🍰 {title}")
-            if colors:
-                st.markdown(f"**색상 제안:** {colors}")
-            if texture:
-                st.markdown(f"**질감:** {texture}")
-            if flavor:
-                st.markdown(f"**맛/재료:** {flavor}")
-            if cake_base:
-                st.markdown(f"**빵 종류:** {cake_base}")
-            if tips:
-                st.markdown(f"**제작 팁:** {tips}")
+def render_design_card(
+    idx: int,
+    suggestion: Dict[str, Any],
+    api_key: str,
+    event_type: str,
+    design_styles: List[str]
+) -> None:
+    """Render a design recommendation card with auto-generated image and dual-column layout."""
+    title = suggestion.get("title") or f"제안 {idx+1}"
+    desc = suggestion.get("description") or ""
+    
+    with st.container():
+        col_left, col_right = st.columns([1, 1.2])
+        
+        # Left: Image
+        with col_left:
+            img_placeholder = st.empty()
+            
+            # Auto-generate image on card render (without button)
+            cache_key = f"{event_type}_{title}_{idx}"
+            
+            if cache_key not in st.session_state.generated_images:
+                with st.spinner(f"이미지 생성 중... ({title})"):
+                    try:
+                        # Build comprehensive image prompt
+                        styles_str = ", ".join(design_styles) if design_styles else "여러 디자인 스타일"
+                        img_prompt = (
+                            f"{event_type} 이벤트 위한 {styles_str}: {title}. "
+                            f"최신 트렌드, 고급 품질, 프로페셔널 디자인. "
+                            f"다채로운 색감과 세련된 스타일."
+                        )
+                        img_bytes = generate_image_cached(
+                            api_key,
+                            img_prompt,
+                            size="1024x1024"
+                        )
+                        st.session_state.generated_images[cache_key] = img_bytes
+                    except Exception as e:
+                        img_placeholder.error(f"이미지 생성 실패: {str(e)[:50]}")
+                        st.session_state.generated_images[cache_key] = None
+            
+            # Display cached image
+            if cache_key in st.session_state.generated_images:
+                img_data = st.session_state.generated_images[cache_key]
+                if img_data:
+                    img_placeholder.image(img_data, use_column_width=True)
+        
+        # Right: Text description
+        with col_right:
+            st.markdown(f"### 🎨 {title}")
             st.markdown(desc)
+            
+            # Add expandable details if present
+            if suggestion.get("details"):
+                with st.expander("자세한 내용"):
+                    st.markdown(suggestion.get("details"))
+        
         st.markdown("---")
 
 
-def render_chat():
-    st.title("케이크 디자이너 챗봇 🍰")
-    st.write("디자이너로서 고객 요구에 맞춰 색상, 질감, 맛, 식감, 빵 종류 등을 추천받으세요.")
-
-    col1, col2 = st.columns([4, 1])
+def render_main_interface() -> None:
+    """Render the main chatbot interface with event and design selection."""
+    st.title("🎨 디자인 트렌드 추천 챗봇")
+    st.write(
+        "이벤트를 선택하고 원하는 디자인 카테고리를 고르면, "
+        "다양한 스타일과 국가별 트렌드를 반영한 디자인을 추천받을 수 있습니다!"
+    )
+    
+    # Event and design selection
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    
+    with col1:
+        event = st.selectbox(
+            "📌 이벤트 선택",
+            EVENTS,
+            key="event_select"
+        )
+        # Extract clean event name
+        event_clean = event.split(" ", 1)[-1] if " " in event else event
+        st.session_state.event_type = event_clean
+    
     with col2:
-        if st.button("초기화"):  # clear chat
+        selected_styles = st.multiselect(
+            "🎯 디자인 카테고리 선택 (중복 가능)",
+            list(DESIGN_CATEGORIES.keys()),
+            default=["케이크"],
+            key="design_styles_select"
+        )
+        st.session_state.design_styles = selected_styles
+    
+    with col3:
+        selected_countries = st.multiselect(
+            "🌍 참고할 국가/지역",
+            COUNTRIES,
+            default=["한국"],
+            key="countries_select"
+        )
+    
+    with col4:
+        st.write("")
+        st.write("")
+        if st.button("🗑️ 초기화", use_container_width=True):
             st.session_state.messages = []
             st.session_state.last_assistant = ""
-
-    # show chat history (compact)
-    for msg in st.session_state.messages[-6:]:
+            st.session_state.generated_images = {}
+    
+    # Chat history (compact view)
+    st.markdown("---")
+    st.subheader("💬 대화 기록")
+    for msg in st.session_state.messages[-4:]:
         if msg["role"] == "user":
-            st.markdown(f"**나:** {msg['content']}")
+            st.markdown(f"**👤 나:** {msg['content'][:100]}...")
         elif msg["role"] == "assistant":
-            txt = msg["content"].strip()
-            if not txt.startswith("🍰"):
-                txt = "🍰 " + txt
-            st.markdown(f"**챗봇:** {txt}")
-
-    # user input
+            st.markdown(f"**🤖 챗봇:** {msg['content'][:100]}...")
+    
+    # User input form
+    st.markdown("---")
     with st.form(key="input_form", clear_on_submit=True):
-        user_input = st.text_input("질문 또는 요청을 입력하세요 (예: 봄 결혼식용 트렌디한 3가지 케이크 추천):")
-        submitted = st.form_submit_button("전송")
-
+        user_input = st.text_input(
+            "✍️ 추가 요청이나 세부사항을 입력하세요:",
+            placeholder="예: 더 modern한 스타일로 해줘 / 북유럽 감성 포함해줘"
+        )
+        submitted = st.form_submit_button("전송 📤", use_container_width=True)
+    
     if submitted and user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
-
-        system_prompt = build_system_prompt()
+        
+        # Build system prompt with selected options
+        system_prompt = build_system_prompt(
+            st.session_state.event_type or "이벤트",
+            st.session_state.design_styles or ["케이크"],
+            selected_countries or ["한국"]
+        )
+        
         api_messages = [{"role": "system", "content": system_prompt}]
-        for m in st.session_state.messages[-12:]:
-            api_messages.append({"role": m["role"], "content": m["content"]})
-
+        
+        # Add user input context
+        context = (
+            f"이벤트: {st.session_state.event_type}\n"
+            f"디자인 카테고리: {', '.join(st.session_state.design_styles)}\n"
+            f"참고 국가: {', '.join(selected_countries)}\n"
+            f"사용자 요청: {user_input}"
+        )
+        api_messages.append({"role": "user", "content": context})
+        
+        # Add previous conversation history
+        for m in st.session_state.messages[-8:]:
+            if m["role"] in ["user", "assistant"]:
+                api_messages.append(m)
+        
         api_key = get_api_key()
         if not api_key:
-            st.error("서버에 설정된 OpenAI API 키가 없습니다. `.streamlit/secrets.toml`에 `OPENAI_API_KEY`를 설정해 주세요.")
+            st.error(
+                "❌ OpenAI API 키가 없습니다. "
+                "`.streamlit/secrets.toml`에 `OPENAI_API_KEY`를 설정해 주세요."
+            )
             return
-
+        
         client = create_openai_client(api_key)
-        with st.spinner("챗봇이 답변을 생성 중입니다..."):
-            assistant_reply = call_chat_api(client, api_messages, model="gpt-4o-mini")
-
-        st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+        with st.spinner("✨ 다양한 디자인 추천을 생성 중입니다..."):
+            assistant_reply = call_chat_api(
+                client,
+                api_messages,
+                model="gpt-4o-mini"
+            )
+        
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": assistant_reply
+        })
         st.session_state.last_assistant = assistant_reply
         st.experimental_rerun()
-
-    # If there's a last assistant reply, render suggestions as cards
+    
+    # Display suggestions as design cards with dual columns
     if st.session_state.last_assistant:
-        assistant_text = st.session_state.last_assistant
-        suggestions = parse_suggestions(assistant_text)
-        st.markdown("## 추천 결과")
-        for i, s in enumerate(suggestions):
-            render_card(i, s, get_api_key())
-
-        # baker summary
-        if st.button("제빵사 요약 보기 🧁"):
+        st.markdown("---")
+        st.subheader("🎨 추천 디자인 (자동 생성 이미지 포함)")
+        
+        suggestions = parse_suggestions(st.session_state.last_assistant)
+        
+        for i, suggestion in enumerate(suggestions):
+            render_design_card(
+                i,
+                suggestion,
+                get_api_key(),
+                st.session_state.event_type or "이벤트",
+                st.session_state.design_styles or ["케이크"]
+            )
+        
+        # Baker summary section
+        st.markdown("---")
+        if st.button("👨‍🍳 제빵사 요약 보기"):
             api_key = get_api_key()
             client = create_openai_client(api_key)
-            with st.spinner("제빵사 요약 생성 중..."):
-                summary = create_baker_summary(client, assistant_text)
-            st.info(summary)
+            with st.spinner("제빵사가 요약을 작성 중입니다..."):
+                sys = (
+                    "당신은 친근한 제빵사 캐릭터입니다. "
+                    "아래 디자인 추천 내용을 짧고 재미있게 요약해 주세요 (2-3문장). "
+                    "이모지와 따뜻한 말투를 사용하세요."
+                )
+                messages = [
+                    {"role": "system", "content": sys},
+                    {"role": "user", "content": st.session_state.last_assistant},
+                ]
+                summary = call_chat_api(client, messages, model="gpt-4o-mini")
+            st.info(f"👨‍🍳 {summary}")
 
 
 def main():
+    """Main application entry point."""
     init_session_state()
+    
     if not get_api_key():
-        st.error("`.streamlit/secrets.toml`에 `OPENAI_API_KEY`가 설정되어 있지 않습니다. 앱이 작동하려면 키가 필요합니다.")
-    render_chat()
+        st.error(
+            "⚠️ OpenAI API 키가 설정되어 있지 않습니다.\n"
+            "`.streamlit/secrets.toml`에 다음을 추가하세요:\n"
+            "`OPENAI_API_KEY=\"your-api-key-here\"`"
+        )
+        st.stop()
+    
+    render_main_interface()
 
 
 if __name__ == "__main__":
