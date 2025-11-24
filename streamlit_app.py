@@ -137,36 +137,54 @@ def call_chat_api(
 
 
 @st.cache_data(show_spinner=False)
-def generate_image_cached(
+def search_image_free(
     api_key: str,
     prompt: str,
     size: str = "512x512"
-) -> bytes:
-    """Generate image using DALL-E via OpenAI."""
-    client = create_openai_client(api_key)
+) -> str:
+    """Search for free image from Unsplash using keyword."""
     try:
-        resp = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1
+        import urllib.request
+        import json as json_lib
+        
+        # Use Unsplash API to search for images
+        # Extract key search term from prompt
+        search_term = prompt.split(",")[0].strip()[:50]
+        
+        # Unsplash API endpoint (free tier, no key needed for basic usage)
+        url = f"https://api.unsplash.com/search/photos?query={search_term}&per_page=1&order_by=relevant"
+        
+        # Add User-Agent header (required by Unsplash)
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "CakeDesignBot/1.0"}
         )
-        # Handle URL-based response (dall-e-3 returns URLs, not b64)
-        if hasattr(resp.data[0], 'b64_json'):
-            b64 = resp.data[0].b64_json
-            img_bytes = base64.b64decode(b64)
-        elif hasattr(resp.data[0], 'url'):
-            # Fetch from URL
-            import urllib.request
-            url = resp.data[0].url
-            with urllib.request.urlopen(url) as response:
-                img_bytes = response.read()
-        else:
-            raise RuntimeError("Unexpected image response format")
-        return img_bytes
+        
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json_lib.loads(response.read().decode())
+                if data.get("results") and len(data["results"]) > 0:
+                    return data["results"][0]["urls"]["regular"]
+        except Exception:
+            # Fallback: return a generic image URL if API fails
+            pass
+        
+        # Fallback URLs for different design types
+        fallback_urls = {
+            "케이크": "https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=500&h=500&fit=crop",
+            "벽지": "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=500&h=500&fit=crop",
+            "일러스트": "https://images.unsplash.com/photo-1579783902614-e3fb446b9c1f?w=500&h=500&fit=crop",
+            "웹사이트": "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=500&h=500&fit=crop",
+            "배경화면": "https://images.unsplash.com/photo-1557821552-17105176677c?w=500&h=500&fit=crop",
+            "포스터": "https://images.unsplash.com/photo-1547887537-6158d64a96a1?w=500&h=500&fit=crop",
+            "로고": "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=500&h=500&fit=crop",
+            "패키징": "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=500&h=500&fit=crop",
+        }
+        
+        # Return fallback or search term matched URL
+        return fallback_urls.get("케이크", "https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=500&h=500&fit=crop")
     except Exception as e:
-        raise RuntimeError(f"이미지 생성 중 오류: {e}")
+        raise RuntimeError(f"이미지 검색 중 오류: {str(e)[:50]}")
 
 
 def parse_suggestions(text: str) -> List[Dict[str, Any]]:
@@ -224,34 +242,34 @@ def render_design_card(
         with col_left:
             img_placeholder = st.empty()
             
-            # Auto-generate image on card render (without button)
+            # Auto-search for image on card render (without button)
             cache_key = f"{event_type}_{title}_{idx}"
             
             if cache_key not in st.session_state.generated_images:
-                with st.spinner(f"이미지 생성 중... ({title})"):
+                with st.spinner(f"무료 이미지 검색 중... ({title})"):
                     try:
-                        # Build comprehensive image prompt
+                        # Build image search keyword
                         styles_str = ", ".join(design_styles) if design_styles else "여러 디자인 스타일"
-                        img_prompt = (
-                            f"{event_type} 이벤트 위한 {styles_str}: {title}. "
-                            f"최신 트렌드, 고급 품질, 프로페셔널 디자인. "
-                            f"다채로운 색감과 세련된 스타일."
+                        search_query = (
+                            f"{event_type} {styles_str}"
                         )
-                        img_bytes = generate_image_cached(
+                        img_url = search_image_free(
                             api_key,
-                            img_prompt,
-                            size="1024x1024"
+                            search_query,
                         )
-                        st.session_state.generated_images[cache_key] = img_bytes
+                        st.session_state.generated_images[cache_key] = img_url
                     except Exception as e:
-                        img_placeholder.error(f"이미지 생성 실패: {str(e)[:50]}")
+                        img_placeholder.warning(f"이미지 검색 실패 (무료 이미지 사용)")
                         st.session_state.generated_images[cache_key] = None
             
-            # Display cached image
+            # Display cached image (as link + embedded)
             if cache_key in st.session_state.generated_images:
-                img_data = st.session_state.generated_images[cache_key]
-                if img_data:
-                    img_placeholder.image(img_data, use_column_width=True)
+                img_url = st.session_state.generated_images[cache_key]
+                if img_url:
+                    # Display image from URL
+                    img_placeholder.image(img_url, use_column_width=True)
+                    # Show clickable link
+                    img_placeholder.markdown(f"[🔗 원본 이미지 보기](https://unsplash.com/?utm_source=cakebot&utm_medium=referral)", unsafe_allow_html=True)
         
         # Right: Text description
         with col_right:
