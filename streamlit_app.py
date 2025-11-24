@@ -189,6 +189,20 @@ def search_image_free(
 
 def parse_suggestions(text: str) -> List[Dict[str, Any]]:
     """Parse AI response into structured suggestions."""
+    # Ensure we have a string to operate on
+    if text is None:
+        return [{"title": "추천 없음", "description": "응답이 비어 있습니다."}]
+
+    if not isinstance(text, str):
+        # Try to extract content attribute or mapping
+        try:
+            if isinstance(text, dict):
+                text = text.get("content") or text.get("message") or str(text)
+            else:
+                text = getattr(text, "content", None) or getattr(text, "message", None) or str(text)
+        except Exception:
+            text = str(text)
+
     try:
         obj = json.loads(text)
         if isinstance(obj, dict):
@@ -202,10 +216,7 @@ def parse_suggestions(text: str) -> List[Dict[str, Any]]:
         pass
 
     # Fallback: split by numbered headings
-    parts = re.split(
-        r"(?:제안|추천|아이디어)\s*\d+[:\.)]?|^\d+[:\.)]",
-        text
-    )
+    parts = re.split(r"(?:제안|추천|아이디어)\s*\d+[:\.)]?|^\d+[:\.)]", text, flags=re.MULTILINE)
     suggestions = []
     for p in parts:
         p = p.strip()
