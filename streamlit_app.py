@@ -356,7 +356,12 @@ def render_main_interface() -> None:
         )
         # Extract clean event name
         event_clean = event.split(" ", 1)[-1] if " " in event else event
-        st.session_state.event_type = event_clean
+        # Allow custom event input (overrides selectbox if provided)
+        custom_event = st.text_input("또는 이벤트 직접 입력 (예: 크리스마스 가족)", value="", key="custom_event_input")
+        if custom_event and custom_event.strip():
+            st.session_state.event_type = custom_event.strip()
+        else:
+            st.session_state.event_type = event_clean
     
     with col2:
         selected_styles = st.multiselect(
@@ -452,11 +457,13 @@ def render_main_interface() -> None:
                 model="gpt-4o-mini"
             )
         
+        # Ensure we store assistant reply as plain string to avoid object-type issues
+        assistant_text = ensure_string(assistant_reply)
         st.session_state.messages.append({
             "role": "assistant",
-            "content": assistant_reply
+            "content": assistant_text
         })
-        st.session_state.last_assistant = assistant_reply
+        st.session_state.last_assistant = assistant_text
         st.rerun()
     
     # Display suggestions as design cards with dual columns
