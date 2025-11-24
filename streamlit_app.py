@@ -335,9 +335,11 @@ def render_main_interface() -> None:
     st.subheader("💬 대화 기록")
     for msg in st.session_state.messages[-4:]:
         if msg["role"] == "user":
-            st.markdown(f"**👤 나:** {msg['content'][:100]}...")
+            content = msg.get("content", str(msg))
+            st.markdown(f"**👤 나:** {str(content)[:100]}...")
         elif msg["role"] == "assistant":
-            st.markdown(f"**🤖 챗봇:** {msg['content'][:100]}...")
+            content = msg.get("content", str(msg))
+            st.markdown(f"**🤖 챗봇:** {str(content)[:100]}...")
     
     # User input form
     st.markdown("---")
@@ -395,7 +397,7 @@ def render_main_interface() -> None:
             "content": assistant_reply
         })
         st.session_state.last_assistant = assistant_reply
-        st.experimental_rerun()
+        st.rerun()
     
     # Display suggestions as design cards with dual columns
     if st.session_state.last_assistant:
